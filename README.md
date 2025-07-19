@@ -129,16 +129,3 @@ If Bill Splitter saved your dinner (and friendships), share it with others!
 
 </div>
 ```
-
-This README is designed to:
-
-1. **Grab attention** with emojis and clear value proposition
-2. **Show the live app** prominently with the screenshot
-3. **Highlight key benefits** that solve real problems
-4. **Use social proof** with testimonials
-5. **Make it easy to try** with prominent call-to-action buttons
-6. **Appeal to different use cases** (restaurants, roommates, trips, etc.)
-7. **Showcase technical features** for developers
-8. **Encourage sharing** and contributions
-
-The tone is friendly, enthusiastic, and focuses on the pain points this app solves rather than just listing features!
