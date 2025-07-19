@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   Plus,
   Copy,
@@ -16,6 +16,11 @@ import {
   Eye,
   ArrowLeft,
   Home,
+  Save,
+  FolderOpen,
+  Download,
+  Calendar,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,6 +30,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
 interface Bill {
   id: string
@@ -51,8 +57,21 @@ interface Result {
   type: "pay" | "receive"
 }
 
+interface SavedBill {
+  id: string
+  name: string
+  date: string
+  mode: Mode
+  items: Item[]
+  people: Person[]
+  bills: Bill[]
+}
+
 type Mode = "per-head" | "individual-items"
 type Screen = "mode-selection" | "items" | "people" | "bill" | "assign-items" | "results"
+
+const STORAGE_KEY = "bill-splitter-state"
+const SAVED_BILLS_KEY = "bill-splitter-saved-bills"
 
 export default function BillSplitter() {
   const [mode, setMode] = useState<Mode>("per-head")
@@ -63,14 +82,67 @@ export default function BillSplitter() {
   const [results, setResults] = useState<Result[]>([])
   const [copied, setCopied] = useState(false)
   const [personCopied, setPersonCopied] = useState(false)
+  const [csvCopied, setCsvCopied] = useState(false)
   const [openDropdowns, setOpenDropdowns] = useState<{ [key: string]: boolean }>({})
   const [selectedPersonPreview, setSelectedPersonPreview] = useState<string>("")
   const [selectedItemsPreview, setSelectedItemsPreview] = useState<string>("all")
   const [showCSVInput, setShowCSVInput] = useState(false)
   const [csvData, setCsvData] = useState("")
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [showLoadDialog, setShowLoadDialog] = useState(false)
+  const [saveBillName, setSaveBillName] = useState("")
+  const [savedBills, setSavedBills] = useState<SavedBill[]>([])
+  const [showPaymentStatus, setShowPaymentStatus] = useState(false)
+  const [paymentStatuses, setPaymentStatuses] = useState<{ [personName: string]: number }>({})
 
   const total = items.reduce((sum, item) => sum + (item.price || 0), 0)
   const totalContributions = people.reduce((sum, person) => sum + (person.contribution || 0), 0)
+
+  // Load state from localStorage on mount
+  useEffect(() => {
+    const savedState = localStorage.getItem(STORAGE_KEY)
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState)
+        setMode(state.mode || "per-head")
+        setCurrentScreen(state.currentScreen || "mode-selection")
+        setBills(state.bills || [{ id: "1", name: "Bill 1" }])
+        setItems(state.items || [{ id: "1", name: "", price: 0, billId: "1", includedPeople: [] }])
+        setPeople(state.people || [{ id: "1", name: "", contribution: 0 }])
+        setResults(state.results || [])
+        setSelectedPersonPreview(state.selectedPersonPreview || "")
+        setSelectedItemsPreview(state.selectedItemsPreview || "all")
+        setPaymentStatuses(state.paymentStatuses || {})
+      } catch (error) {
+        console.error("Error loading saved state:", error)
+      }
+    }
+
+    const savedBillsData = localStorage.getItem(SAVED_BILLS_KEY)
+    if (savedBillsData) {
+      try {
+        setSavedBills(JSON.parse(savedBillsData))
+      } catch (error) {
+        console.error("Error loading saved bills:", error)
+      }
+    }
+  }, [])
+
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    const state = {
+      mode,
+      currentScreen,
+      bills,
+      items,
+      people,
+      results,
+      selectedPersonPreview,
+      selectedItemsPreview,
+      paymentStatuses,
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  }, [mode, currentScreen, bills, items, people, results, selectedPersonPreview, selectedItemsPreview, paymentStatuses])
 
   // Check if there's any user input to show back button
   const hasUserInput = useMemo(() => {
@@ -144,6 +216,79 @@ export default function BillSplitter() {
       .split("\n")
       .map((line) => line.split(",").map((cell) => cell.trim()))
       .filter((row) => row.length > 1 && row[0]) // Filter out empty rows
+  }
+
+  const generatePeopleCSV = () => {
+    const validPeople = people.filter((p) => p.name.trim())
+    return validPeople.map((person) => `${person.name},${person.contribution || 0}`).join("\n")
+  }
+
+  const generateItemsCSV = () => {
+    const validItems = items.filter((item) => item.name.trim() && item.price > 0)
+    return validItems.map((item) => `${item.name},${item.price}`).join("\n")
+  }
+
+  const copyPeopleCSV = async () => {
+    const csv = generatePeopleCSV()
+    if (csv) {
+      try {
+        await navigator.clipboard.writeText(csv)
+        setCsvCopied(true)
+        setTimeout(() => setCsvCopied(false), 2000)
+      } catch (err) {
+        console.error("Failed to copy CSV: ", err)
+      }
+    }
+  }
+
+  const copyItemsCSV = async () => {
+    const csv = generateItemsCSV()
+    if (csv) {
+      try {
+        await navigator.clipboard.writeText(csv)
+        setCsvCopied(true)
+        setTimeout(() => setCsvCopied(false), 2000)
+      } catch (err) {
+        console.error("Failed to copy CSV: ", err)
+      }
+    }
+  }
+
+  const saveBill = () => {
+    if (!saveBillName.trim()) return
+
+    const newSavedBill: SavedBill = {
+      id: Date.now().toString(),
+      name: saveBillName.trim(),
+      date: new Date().toISOString(),
+      mode,
+      items: items.filter((item) => item.name.trim() && item.price > 0),
+      people: people.filter((person) => person.name.trim()),
+      bills,
+    }
+
+    const updatedSavedBills = [...savedBills, newSavedBill]
+    setSavedBills(updatedSavedBills)
+    localStorage.setItem(SAVED_BILLS_KEY, JSON.stringify(updatedSavedBills))
+
+    setSaveBillName("")
+    setShowSaveDialog(false)
+  }
+
+  const loadBill = (savedBill: SavedBill) => {
+    setMode(savedBill.mode)
+    setItems(savedBill.items)
+    setPeople(savedBill.people)
+    setBills(savedBill.bills)
+    setResults([])
+    setCurrentScreen(savedBill.mode === "per-head" ? "items" : "people")
+    setShowLoadDialog(false)
+  }
+
+  const deleteSavedBill = (billId: string) => {
+    const updatedSavedBills = savedBills.filter((bill) => bill.id !== billId)
+    setSavedBills(updatedSavedBills)
+    localStorage.setItem(SAVED_BILLS_KEY, JSON.stringify(updatedSavedBills))
   }
 
   const importPeopleFromCSV = () => {
@@ -464,6 +609,48 @@ export default function BillSplitter() {
     }
   }
 
+  const updatePaymentStatus = (personName: string, amount: number) => {
+    setPaymentStatuses((prev) => ({
+      ...prev,
+      [personName]: amount,
+    }))
+  }
+
+  const getPaymentStatus = (personName: string) => {
+    const result = results.find((r) => r.name === personName)
+    if (!result) return { status: "settled", amount: 0, type: "pay" as const }
+
+    const paidAmount = paymentStatuses[personName] || 0
+    const remainingAmount = result.amount - paidAmount
+
+    if (Math.abs(remainingAmount) < 0.01) {
+      return { status: "settled", amount: 0, type: result.type }
+    } else if (remainingAmount > 0) {
+      return { status: "pending", amount: remainingAmount, type: result.type }
+    } else {
+      return { status: "overpaid", amount: Math.abs(remainingAmount), type: result.type }
+    }
+  }
+
+  const getOverallPaymentSummary = () => {
+    const summary = { needToPay: [], needToReceive: [], settled: [] }
+
+    results.forEach((result) => {
+      const status = getPaymentStatus(result.name)
+      if (status.status === "settled") {
+        summary.settled.push(result.name)
+      } else if (status.status === "pending") {
+        if (result.type === "pay") {
+          summary.needToPay.push({ name: result.name, amount: status.amount })
+        } else {
+          summary.needToReceive.push({ name: result.name, amount: status.amount })
+        }
+      }
+    })
+
+    return summary
+  }
+
   const resetApp = () => {
     setCurrentScreen("mode-selection")
     setItems([{ id: "1", name: "", price: 0, billId: "1", includedPeople: [] }])
@@ -476,6 +663,10 @@ export default function BillSplitter() {
     setSelectedItemsPreview("all")
     setShowCSVInput(false)
     setCsvData("")
+    setShowPaymentStatus(false)
+    setPaymentStatuses({})
+    // Clear localStorage
+    localStorage.removeItem(STORAGE_KEY)
   }
 
   const getScreenProgress = () => {
@@ -501,11 +692,90 @@ export default function BillSplitter() {
               </Button>
             )}
             <h1 className="text-3xl font-bold text-gray-800 flex-1">Bill Splitter</h1>
-            {currentScreen !== "mode-selection" && (
-              <Button variant="ghost" size="sm" onClick={goHome} className="p-2">
-                <Home className="w-4 h-4" />
-              </Button>
-            )}
+            <div className="flex gap-1">
+              {currentScreen !== "mode-selection" && (
+                <>
+                  <Dialog open={showLoadDialog} onOpenChange={setShowLoadDialog}>
+                    <DialogTrigger asChild>
+                      <Button variant="ghost" size="sm" className="p-2">
+                        <FolderOpen className="w-4 h-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-sm">
+                      <DialogHeader>
+                        <DialogTitle>Load Saved Bill</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-3 max-h-60 overflow-y-auto">
+                        {savedBills.length === 0 ? (
+                          <p className="text-gray-500 text-center py-4">No saved bills found</p>
+                        ) : (
+                          savedBills.map((savedBill) => (
+                            <div key={savedBill.id} className="flex items-center justify-between p-3 border rounded">
+                              <div className="flex-1">
+                                <div className="font-medium">{savedBill.name}</div>
+                                <div className="text-sm text-gray-500">
+                                  {new Date(savedBill.date).toLocaleDateString()} • {savedBill.mode}
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => loadBill(savedBill)} className="p-1">
+                                  <Download className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => deleteSavedBill(savedBill.id)}
+                                  className="p-1 text-red-500 hover:text-red-700"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+
+                  <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+                    <DialogTrigger asChild>
+                      <Button variant="ghost" size="sm" className="p-2">
+                        <Save className="w-4 h-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-sm">
+                      <DialogHeader>
+                        <DialogTitle>Save Current Bill</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="bill-name">Bill Name</Label>
+                          <Input
+                            id="bill-name"
+                            value={saveBillName}
+                            onChange={(e) => setSaveBillName(e.target.value)}
+                            placeholder="e.g., Dinner at Restaurant"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button onClick={saveBill} disabled={!saveBillName.trim()} className="flex-1">
+                            <Calendar className="w-4 h-4 mr-2" />
+                            Save Bill
+                          </Button>
+                          <Button variant="outline" onClick={() => setShowSaveDialog(false)} className="flex-1">
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+
+                  <Button variant="ghost" size="sm" onClick={goHome} className="p-2">
+                    <Home className="w-4 h-4" />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
           {currentScreen !== "mode-selection" && (
             <div className="flex justify-center space-x-2">
@@ -592,13 +862,18 @@ export default function BillSplitter() {
               </Button>
 
               <div className="border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCSVInput(!showCSVInput)}
-                  className="w-full bg-transparent mb-2"
-                >
-                  {showCSVInput ? "Hide" : "Import from"} CSV
-                </Button>
+                <div className="flex gap-2 mb-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowCSVInput(!showCSVInput)}
+                    className="flex-1 bg-transparent"
+                  >
+                    {showCSVInput ? "Hide" : "Import from"} CSV
+                  </Button>
+                  <Button variant="outline" onClick={copyPeopleCSV} className="bg-transparent">
+                    {csvCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
 
                 {showCSVInput && (
                   <div className="space-y-3">
@@ -728,13 +1003,18 @@ export default function BillSplitter() {
               ))}
 
               <div className="border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCSVInput(!showCSVInput)}
-                  className="w-full bg-transparent mb-2"
-                >
-                  {showCSVInput ? "Hide" : "Import from"} CSV
-                </Button>
+                <div className="flex gap-2 mb-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowCSVInput(!showCSVInput)}
+                    className="flex-1 bg-transparent"
+                  >
+                    {showCSVInput ? "Hide" : "Import from"} CSV
+                  </Button>
+                  <Button variant="outline" onClick={copyItemsCSV} className="bg-transparent">
+                    {csvCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
 
                 {showCSVInput && (
                   <div className="space-y-3">
@@ -967,13 +1247,18 @@ export default function BillSplitter() {
               </Button>
 
               <div className="border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCSVInput(!showCSVInput)}
-                  className="w-full bg-transparent mb-2"
-                >
-                  {showCSVInput ? "Hide" : "Import from"} CSV
-                </Button>
+                <div className="flex gap-2 mb-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowCSVInput(!showCSVInput)}
+                    className="flex-1 bg-transparent"
+                  >
+                    {showCSVInput ? "Hide" : "Import from"} CSV
+                  </Button>
+                  <Button variant="outline" onClick={copyItemsCSV} className="bg-transparent">
+                    {csvCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
 
                 {showCSVInput && (
                   <div className="space-y-3">
@@ -1079,13 +1364,18 @@ export default function BillSplitter() {
               </Button>
 
               <div className="border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCSVInput(!showCSVInput)}
-                  className="w-full bg-transparent mb-2"
-                >
-                  {showCSVInput ? "Hide" : "Import from"} CSV
-                </Button>
+                <div className="flex gap-2 mb-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowCSVInput(!showCSVInput)}
+                    className="flex-1 bg-transparent"
+                  >
+                    {showCSVInput ? "Hide" : "Import from"} CSV
+                  </Button>
+                  <Button variant="outline" onClick={copyPeopleCSV} className="bg-transparent">
+                    {csvCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
 
                 {showCSVInput && (
                   <div className="space-y-3">
@@ -1336,6 +1626,143 @@ export default function BillSplitter() {
                             </div>
                           )
                         })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Payment Status Tracking */}
+              {results.length > 0 && (
+                <div className="bg-purple-50 p-4 rounded-lg">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-purple-600" />
+                      <Label className="text-sm font-medium text-purple-800">Payment Status</Label>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowPaymentStatus(!showPaymentStatus)}
+                      className="bg-transparent text-purple-700 border-purple-300"
+                      size="sm"
+                    >
+                      {showPaymentStatus ? "Hide" : "View"} Payees
+                    </Button>
+                  </div>
+
+                  {showPaymentStatus && (
+                    <div className="space-y-4">
+                      {/* Payment Summary */}
+                      <div className="bg-white p-3 rounded border">
+                        <h4 className="font-medium text-sm mb-2">Payment Summary:</h4>
+                        {(() => {
+                          const summary = getOverallPaymentSummary()
+                          return (
+                            <div className="space-y-1 text-xs">
+                              {summary.needToPay.length > 0 && (
+                                <div className="text-red-700">
+                                  <strong>Need to pay:</strong>{" "}
+                                  {summary.needToPay.map((p) => `${p.name} (₹${p.amount.toFixed(2)})`).join(", ")}
+                                </div>
+                              )}
+                              {summary.needToReceive.length > 0 && (
+                                <div className="text-orange-700">
+                                  <strong>Need to receive:</strong>{" "}
+                                  {summary.needToReceive.map((p) => `${p.name} (₹${p.amount.toFixed(2)})`).join(", ")}
+                                </div>
+                              )}
+                              {summary.settled.length > 0 && (
+                                <div className="text-green-700">
+                                  <strong>Settled:</strong> {summary.settled.join(", ")}
+                                </div>
+                              )}
+                              {summary.needToPay.length === 0 && summary.needToReceive.length === 0 && (
+                                <div className="text-green-700">
+                                  <strong>All payments settled! 🎉</strong>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
+                      </div>
+
+                      {/* Individual Payment Tracking */}
+                      <div className="space-y-2">
+                        {results.map((result, index) => {
+                          const status = getPaymentStatus(result.name)
+                          const isSettled = status.status === "settled"
+                          const needsToPay = result.type === "pay" && status.status === "pending"
+                          const needsToReceive = result.type === "receive" && status.status === "pending"
+
+                          return (
+                            <div
+                              key={index}
+                              className={`p-3 rounded border ${
+                                isSettled
+                                  ? "bg-green-50 border-green-200"
+                                  : needsToReceive
+                                    ? "bg-yellow-50 border-yellow-200"
+                                    : needsToPay
+                                      ? "bg-red-50 border-red-200"
+                                      : "bg-gray-50 border-gray-200"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-sm">{result.name}</span>
+                                  {isSettled && <Check className="w-4 h-4 text-green-600" />}
+                                </div>
+                                <div className="text-xs text-gray-600">
+                                  {result.type === "pay" ? "Should pay" : "Should receive"}: ₹{result.amount.toFixed(2)}
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Label htmlFor={`payment-${index}`} className="text-xs">
+                                    {result.type === "pay" ? "Amount paid:" : "Amount received:"}
+                                  </Label>
+                                  <Input
+                                    id={`payment-${index}`}
+                                    type="number"
+                                    placeholder="0"
+                                    value={paymentStatuses[result.name] || ""}
+                                    onChange={(e) =>
+                                      updatePaymentStatus(result.name, Number.parseFloat(e.target.value) || 0)
+                                    }
+                                    onKeyDown={handleNumericInput}
+                                    className={`w-24 h-8 text-xs ${
+                                      needsToPay
+                                        ? "border-red-300 focus:border-red-500"
+                                        : needsToReceive
+                                          ? "border-yellow-300 focus:border-yellow-500"
+                                          : "border-green-300 focus:border-green-500"
+                                    }`}
+                                  />
+                                  <Button variant="ghost" size="sm" className="p-1 h-8 w-8" title="Edit payment amount">
+                                    <Edit3 className="w-3 h-3" />
+                                  </Button>
+                                </div>
+
+                                {status.status === "pending" && (
+                                  <div className={`text-xs ${needsToPay ? "text-red-600" : "text-orange-600"}`}>
+                                    Remaining: ₹{status.amount.toFixed(2)}
+                                  </div>
+                                )}
+
+                                {status.status === "overpaid" && (
+                                  <div className="text-xs text-blue-600">Overpaid by: ₹{status.amount.toFixed(2)}</div>
+                                )}
+
+                                {isSettled && (
+                                  <div className="text-xs text-green-600">
+                                    ✓ Payment settled (₹{(paymentStatuses[result.name] || 0).toFixed(2)})
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
